@@ -1,6 +1,11 @@
 import torch
+import torch.optim as optim
+import torchvision.datasets as datasets
+import torchvision.transforms as transforms
 import numpy as np
 from torch import nn
+from torch.utils.data import DataLoader
+from torchvision.utils import save_image
 from config import *
 
 def init_weights(m):
@@ -98,6 +103,7 @@ class Little_D(nn.Module):
 class Big_D(nn.Module):
     def __init__(self, params=None, layernorm=True):
         super(Big_D, self).__init__()
+        self.opt = optim.RMSprop(self.parameters(), lr=BIG_D_LR)
         if params is None:
             # (ch, kernel, stride, padding)
             params = [(NDF*1, 4, 2, 1), (NDF*2, 4, 2, 1), (NDF*4, 4, 2, 1), (NDF*8, 4, 2, 1)]
@@ -123,13 +129,51 @@ class Big_D(nn.Module):
         x = self.fc(x)
         return x
 
-if __name__ == '__main__':
-    im = IdeaMaker()
-    de = Decoder()
-    en = Encoder()
-    big_d = Big_D()
-    little_d = Little_D()
+class IdeaGAN(nn.Module):
+    def __init__(self):
+        self.idea_maker = IdeaMaker()
+        self.encoder = Encoder()
+        self.decoder = Decoder()
+        self.little_d = Little_D()
+        self.big_d = Big_D()
 
-    
-    tmp = torch.randn(10, NOISE_DIM)
-    print(little_d(en(de(im(tmp)))).size())
+    def make_fake_img(self):
+        noise = torch.randn(BATCH_SIZE, NOISE_DIM)
+        idea = self.idea_maker(noise)
+        fake_img = self.decoder(idea)
+        return fake_img.detach()
+
+    def g_fake_pass(self):
+        noise = torch.randn(BATCH_SIZE, NOISE_DIM)
+        idea = self.idea_maker(noise)
+        little_d_out = self.little_d(idea)
+        fake_img = self.decoder(idea)
+        detached_fake_img = fake_img.detach()
+        big_d_out = self.big_d(fake_img)
+        return little_d_out[:, -1], big_d_out, detached_fake_img
+
+    def g_real_pass(self, real_img):
+        #real_img::(BATCH_SIZE, IMG_CH, IMG_SIZE, IMG_SIZE), torch.FloatTensor
+        idea = self.encoder(real_img)
+        little_d_out = self.little_d(idea)
+        reconstructed = self.decoder(idea)
+        return little_d_out, reconstructed
+
+    def d_pass(self, real_img, fake_img):
+        real_out = torch.mean(self.big_d(real_img))
+        fake_out = torch.mean(self.big_d(fake_img))
+        return real_out - fake_out
+
+if __name__ == '__main__':
+    print(DEVICE)
+    transform = transforms.Compose([transforms.Resize(IMG_SIZE),
+                                transforms.ToTensor(),  # convert in the range [0.0, 1.0]
+                                transforms.Normalize([0.5], [0.5])])  # (ch - m) / s -> [-1, 1]
+    mnist = datasets.MNIST('./mnist_data', download=True, train=True, transform=transform)
+    data_loader = DataLoader(mnist, batch_size=1, shuffle=True, num_workers=1)
+    for x, y in data_loader:
+        print(x.type())
+        save_image(x, './tmp/tmp.png', normalize=True)
+        break
+    print(x.to(DEVICE))
+
