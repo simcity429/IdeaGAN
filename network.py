@@ -6,6 +6,7 @@ import numpy as np
 from torch import nn
 from torch.utils.data import DataLoader
 from torch.distributions.multivariate_normal import MultivariateNormal
+from torch.distributions.kl import kl_divergence
 from torchvision.utils import save_image
 from itertools import chain
 from config import *
@@ -24,7 +25,9 @@ def init_weights(m):
 class IdeaMaker(nn.Module):
     def __init__(self):
         super(IdeaMaker, self).__init__()
-        self.cov = torch.eye(NOISE_DIM)
+        self.cov = COV_COEF*torch.eye(NOISE_DIM).to(DEVICE)
+        zero_m = torch.zeros(NOISE_DIM).to(DEVICE)
+        self.target_dist = MultivariateNormal(zero_m, self.cov)
         self.network = nn.Sequential(
             nn.Linear(NOISE_DIM, IM_HIDDEN_UNIT_NUM),
             nn.BatchNorm1d(IM_HIDDEN_UNIT_NUM),
@@ -38,12 +41,14 @@ class IdeaMaker(nn.Module):
     def forward(self, x):
         m = self.network(x)
         dist = MultivariateNormal(m, self.cov)
-        return dist.rsample()
+        return dist.mean, torch.mean(kl_divergence(self.target_dist, dist))
 
 class Encoder(nn.Module):
     def __init__(self, params=None, layernorm=True):
         super(Encoder, self).__init__()
-        self.cov = torch.eye(NOISE_DIM)
+        self.cov = COV_COEF*torch.eye(NOISE_DIM).to(DEVICE)
+        zero_m = torch.zeros(NOISE_DIM).to(DEVICE)
+        self.target_dist = MultivariateNormal(zero_m, self.cov)
         if params is None:
             # (ch, kernel, stride, padding)
             params = [(NDF*1, 4, 2, 1), (NDF*2, 4, 2, 1), (NDF*4, 4, 2, 1), (NDF*8, 4, 2, 1)]
@@ -69,7 +74,7 @@ class Encoder(nn.Module):
         x = x.view(x.size(0), -1)
         m = self.fc(x)
         dist = MultivariateNormal(m, self.cov)
-        return dist.rsample()
+        return dist.mean, torch.mean(kl_divergence(self.target_dist, dist))
 
 class Decoder(nn.Module):
     def __init__(self, params=None):
@@ -154,51 +159,55 @@ class IdeaGAN(nn.Module):
 
     def make_fake_img(self):
         noise = torch.randn(BATCH_SIZE, NOISE_DIM).to(DEVICE)
-        idea = self.idea_maker(noise)
+        idea, _ = self.idea_maker(noise)
         fake_img = self.decoder(idea)
         return fake_img.detach().to(DEVICE)
 
-    def make_idea(self, real_img):
-        real_idea = self.encoder(real_img)
+    def make_fake_img_by_noise(self):
         noise = torch.randn(BATCH_SIZE, NOISE_DIM).to(DEVICE)
-        fake_idea = self.idea_maker(noise)
+        fake_img = self.decoder(noise)
+        return fake_img.detach().to(DEVICE)
+
+    def make_idea(self, real_img):
+        real_idea, _ = self.encoder(real_img)
+        noise = torch.randn(BATCH_SIZE, NOISE_DIM).to(DEVICE)
+        fake_idea, _ = self.idea_maker(noise)
         return real_idea.detach(), fake_idea.detach()
 
     def make_restored_img(self, real_img):
-        real_idea = self.encoder(real_img)
+        real_idea, _ = self.encoder(real_img)
         reconstructed = self.decoder(real_idea)
         return reconstructed.detach().to(DEVICE)
 
     def g_fake_pass(self):
         noise = torch.randn(BATCH_SIZE, NOISE_DIM).to(DEVICE)
-        fake_idea = self.idea_maker(noise)
+        fake_idea, kl = self.idea_maker(noise)
         little_d_out = self.little_d(fake_idea)
-        fake_img = self.decoder(fake_idea)
+        fake_img = self.decoder(fake_idea.detach())
         big_d_out = self.big_d(fake_img)
         adv_big_d_loss = -torch.mean(big_d_out)
-        real_label = torch.ones(BATCH_SIZE).to(DEVICE)
-        adv_little_d_loss = self.logit_bceloss(little_d_out[:, -1], real_label)
+        adv_little_d_loss = -torch.mean(little_d_out[:, -1]) + KL_COEF*kl
         return adv_little_d_loss, adv_big_d_loss, fake_img.detach(), fake_idea.detach()
 
     def g_real_pass(self, real_img, answer):
         #real_img::(BATCH_SIZE, IMG_CH, IMG_SIZE, IMG_SIZE), torch.FloatTensor
-        real_idea = self.encoder(real_img)
+        real_idea, kl = self.encoder(real_img)
         little_d_out = self.little_d(real_idea)
         reconstructed = self.decoder(real_idea)
-        recon_loss = self.l1_loss(real_img, reconstructed)
+        recon_loss = self.l1_loss(real_img, reconstructed) + KL_COEF*kl
         classifier_loss = self.crossentropy_loss(little_d_out[:, :-1], answer)
         return recon_loss, classifier_loss, real_idea.detach()
 
     def big_d_pass(self, real_img, fake_img):
         real_out = self.big_d(real_img)
         fake_out = self.big_d(fake_img)
-        return torch.mean(real_out - fake_out)
+        return -torch.mean(real_out - fake_out)
 
     def little_d_pass(self, real_idea, fake_idea, answer):
         real_out = self.little_d(real_idea)
         fake_out = self.little_d(fake_idea)
         classifier_loss = self.crossentropy_loss(real_out[:, :-1], answer)
-        little_d_loss = torch.mean(real_out - fake_out)
+        little_d_loss = -torch.mean(real_out - fake_out)
         return classifier_loss, little_d_loss
 
     def d_only_update(self, real_img, answer):
@@ -224,8 +233,8 @@ class IdeaGAN(nn.Module):
         #encoder, decoder, idea_maker update
         adv_little_d_loss, adv_big_d_loss, fake_img, fake_idea = self.g_fake_pass()
         recon_loss, classifier_loss, real_idea = self.g_real_pass(real_img, answer)
-        loss = adv_little_d_loss + adv_big_d_loss + recon_loss + CLASSIFIER_COEF*classifier_loss
-        print(loss)
+        loss = adv_little_d_loss + 0*adv_big_d_loss + RECON_COEF*recon_loss + CLASSIFIER_COEF*classifier_loss
+        print('adv_little_d_loss: ',adv_little_d_loss.data, 'recon: ', recon_loss.data, 'classifier: ', classifier_loss.data)
         self.zero_grad()
         loss.backward()
         self.idea_maker.opt.step()

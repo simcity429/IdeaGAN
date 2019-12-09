@@ -10,8 +10,8 @@ if __name__ == '__main__':
     transform = transforms.Compose([transforms.Resize(IMG_SIZE),
                                 transforms.ToTensor(),  # convert in the range [0.0, 1.0]
                                 transforms.Normalize([0.5], [0.5])])  # (ch - m) / s -> [-1, 1]
-    mnist = datasets.MNIST('./mnist_data', download=True, train=True, transform=transform)
-    data_loader = DataLoader(mnist, batch_size=BATCH_SIZE, shuffle=True, num_workers=1)
+    cifar10 = datasets.MNIST('./mnist_data', download=True, train=True, transform=transform)
+    data_loader = DataLoader(cifar10, batch_size=BATCH_SIZE, shuffle=True, num_workers=1)
     big_d_update_cnt = 0
     step_cnt = 0
     for e in range(EPOCH):
@@ -30,6 +30,8 @@ if __name__ == '__main__':
             print(step_cnt)
             if step_cnt % 10 == 0:
                 fake_img = idea_gan.make_fake_img()
+                noise_fake_img = idea_gan.make_fake_img_by_noise()
                 real_img = idea_gan.make_restored_img(real_img)
+                save_image(make_grid(noise_fake_img, normalize=True), "./tmp/noise_fake.png")
                 save_image(make_grid(fake_img, normalize=True), "./tmp/fake.png")
                 save_image(make_grid(real_img, normalize=True), "./tmp/restored.png")
