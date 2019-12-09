@@ -6,6 +6,7 @@ import numpy as np
 from torch import nn
 from torch.utils.data import DataLoader
 from torchvision.utils import save_image
+from itertools import chain
 from config import *
 
 def init_weights(m):
@@ -29,6 +30,7 @@ class IdeaMaker(nn.Module):
             nn.Linear(IM_HIDDEN_UNIT_NUM, NOISE_DIM)
         )
         self.apply(init_weights)
+        self.opt = optim.Adam(self.parameters(), IDEAMAKER_LR)
 
 
     def forward(self, x):
@@ -48,17 +50,18 @@ class Encoder(nn.Module):
             new_size = int((new_size - kernel_size + 2*padding)/stride) + 1
             self.convs.append(nn.Conv2d(in_channels, out_channels,
                                         kernel_size, stride, padding, bias=False))  # all layers
-            if layernorm and i != 0:  
+            if layernorm and i != 0:
                 self.convs.append(nn.LayerNorm((out_channels, new_size, new_size)))  # except input layer
             self.convs.append(nn.LeakyReLU(0.2, inplace=True))  # all layers
             in_channels = out_channels
         self.fc = nn.Linear(in_channels*new_size*new_size, NOISE_DIM)  # output layer
         self.apply(init_weights)
+        self.opt = optim.Adam(self.parameters(), ENCODER_LR)
 
     def forward(self, x):
         for layer in self.convs:
             x = layer(x)
-        x = x.view(x.size(0), -1) 
+        x = x.view(x.size(0), -1)
         x = self.fc(x)
         return x
 
@@ -71,16 +74,17 @@ class Decoder(nn.Module):
         in_channels = NOISE_DIM
 
         self.convs = nn.ModuleList()
-        for i, (out_channels, kernel_size, stride, padding) in enumerate(params):             
+        for i, (out_channels, kernel_size, stride, padding) in enumerate(params):
             self.convs.append(nn.ConvTranspose2d(in_channels, out_channels,
                                                  kernel_size, stride, padding, bias=False))  # all layers
-            if i < len(params) - 1:     
+            if i < len(params) - 1:
                 self.convs.append(nn.BatchNorm2d(out_channels))  # except output layer
                 self.convs.append(nn.ReLU())  # except output layer
-            else:                       
+            else:
                 self.convs.append(nn.Tanh())  # output layer
             in_channels = out_channels
         self.apply(init_weights)
+        self.opt = optim.Adam(self.parameters(), DECODER_LR)
 
     def forward(self, x):
         x = x.view(-1, NOISE_DIM, 1, 1)
@@ -95,6 +99,7 @@ class Little_D(nn.Module):
             nn.Linear(NOISE_DIM, CLASS_NUM + 1),
         )
         self.apply(init_weights)
+        self.opt = optim.Adam(self.parameters(), LITTLE_D_LR)
 
     def forward(self, x):
         return self.network(x)
@@ -103,7 +108,6 @@ class Little_D(nn.Module):
 class Big_D(nn.Module):
     def __init__(self, params=None, layernorm=True):
         super(Big_D, self).__init__()
-        self.opt = optim.RMSprop(self.parameters(), lr=BIG_D_LR)
         if params is None:
             # (ch, kernel, stride, padding)
             params = [(NDF*1, 4, 2, 1), (NDF*2, 4, 2, 1), (NDF*4, 4, 2, 1), (NDF*8, 4, 2, 1)]
@@ -115,65 +119,108 @@ class Big_D(nn.Module):
             new_size = int((new_size - kernel_size + 2*padding)/stride) + 1
             self.convs.append(nn.Conv2d(in_channels, out_channels,
                                         kernel_size, stride, padding, bias=False))  # all layers
-            if layernorm and i != 0:  
+            if layernorm and i != 0:
                 self.convs.append(nn.LayerNorm((out_channels, new_size, new_size)))  # except input layer
             self.convs.append(nn.LeakyReLU(0.2, inplace=True))  # all layers
             in_channels = out_channels
         self.fc = nn.Linear(in_channels*new_size*new_size, 1)  # output layer
         self.apply(init_weights)
+        self.opt = optim.RMSprop(self.parameters(), lr=BIG_D_LR)
 
     def forward(self, x):
         for layer in self.convs:
             x = layer(x)
-        x = x.view(x.size(0), -1) 
+        x = x.view(x.size(0), -1)
         x = self.fc(x)
         return x
 
 class IdeaGAN(nn.Module):
     def __init__(self):
-        self.idea_maker = IdeaMaker()
-        self.encoder = Encoder()
-        self.decoder = Decoder()
-        self.little_d = Little_D()
-        self.big_d = Big_D()
+        super(IdeaGAN, self).__init__()
+        self.idea_maker = IdeaMaker().to(DEVICE)
+        self.encoder = Encoder().to(DEVICE)
+        self.decoder = Decoder().to(DEVICE)
+        self.little_d = Little_D().to(DEVICE)
+        self.big_d = Big_D().to(DEVICE)
+        self.logit_bceloss = nn.BCEWithLogitsLoss()
+        self.l1_loss = nn.L1Loss()
+        self.crossentropy_loss = nn.CrossEntropyLoss()
 
     def make_fake_img(self):
-        noise = torch.randn(BATCH_SIZE, NOISE_DIM)
+        noise = torch.randn(BATCH_SIZE, NOISE_DIM).to(DEVICE)
         idea = self.idea_maker(noise)
         fake_img = self.decoder(idea)
         return fake_img.detach()
 
     def g_fake_pass(self):
-        noise = torch.randn(BATCH_SIZE, NOISE_DIM)
-        idea = self.idea_maker(noise)
-        little_d_out = self.little_d(idea)
-        fake_img = self.decoder(idea)
-        detached_fake_img = fake_img.detach()
+        noise = torch.randn(BATCH_SIZE, NOISE_DIM).to(DEVICE)
+        fake_idea = self.idea_maker(noise)
+        little_d_out = self.little_d(fake_idea)
+        fake_img = self.decoder(fake_idea.detach())
         big_d_out = self.big_d(fake_img)
-        return little_d_out[:, -1], big_d_out, detached_fake_img
+        adv_big_d_loss = -torch.mean(big_d_out)
+        real_label = torch.ones(BATCH_SIZE).to(DEVICE)
+        adv_little_d_loss = self.logit_bceloss(little_d_out[:, -1], real_label)
+        return adv_little_d_loss, adv_big_d_loss, fake_img.detach(), fake_idea.detach()
 
-    def g_real_pass(self, real_img):
+    def g_real_pass(self, real_img, answer):
         #real_img::(BATCH_SIZE, IMG_CH, IMG_SIZE, IMG_SIZE), torch.FloatTensor
-        idea = self.encoder(real_img)
-        little_d_out = self.little_d(idea)
-        reconstructed = self.decoder(idea)
-        return little_d_out, reconstructed
+        real_idea = self.encoder(real_img)
+        little_d_out = self.little_d(real_idea)
+        reconstructed = self.decoder(real_idea)
+        recon_loss = self.l1_loss(real_img, reconstructed)
+        classifier_loss = self.crossentropy_loss(little_d_out[:, :-1], answer)
+        return recon_loss, classifier_loss, real_idea.detach()
 
-    def d_pass(self, real_img, fake_img):
+    def big_d_pass(self, real_img, fake_img):
         real_out = torch.mean(self.big_d(real_img))
         fake_out = torch.mean(self.big_d(fake_img))
         return real_out - fake_out
 
-if __name__ == '__main__':
-    print(DEVICE)
-    transform = transforms.Compose([transforms.Resize(IMG_SIZE),
-                                transforms.ToTensor(),  # convert in the range [0.0, 1.0]
-                                transforms.Normalize([0.5], [0.5])])  # (ch - m) / s -> [-1, 1]
-    mnist = datasets.MNIST('./mnist_data', download=True, train=True, transform=transform)
-    data_loader = DataLoader(mnist, batch_size=1, shuffle=True, num_workers=1)
-    for x, y in data_loader:
-        print(x.type())
-        save_image(x, './tmp/tmp.png', normalize=True)
-        break
-    print(x.to(DEVICE))
+    def little_d_pass(self, real_idea, fake_idea, answer):
+        real_out = self.little_d(real_idea)
+        fake_out = self.little_d(fake_idea)
+        classifier_loss = self.crossentropy_loss(real_out[:, :-1], answer)
+        real_label = torch.ones(BATCH_SIZE).to(DEVICE)
+        fake_label = torch.zeros(BATCH_SIZE).to(DEVICE)
+        real_d_loss = self.logit_bceloss(real_out[:, -1], real_label)
+        fake_d_loss = self.logit_bceloss(fake_out[:, -1], fake_label)
+        little_d_loss = 0.5*real_d_loss + 0.5*fake_d_loss
+        return classifier_loss, little_d_loss
+
+    def big_d_only_update(self, real_img):
+        fake_img = self.make_fake_img()
+        big_d_loss = self.big_d_pass(real_img, fake_img)
+        self.zero_grad()
+        big_d_loss.backward()
+        self.big_d.opt.step()
+        for p in self.big_d.parameters():
+            p.data.clamp_(-0.01, 0.01)
+
+    def update_all(self, real_img, answer):
+        #encoder, decoder, idea_maker update
+        adv_little_d_loss, adv_big_d_loss, fake_img, fake_idea = self.g_fake_pass()
+        recon_loss, classifier_loss, real_idea = self.g_real_pass(real_img, answer)
+        loss = adv_little_d_loss + adv_big_d_loss + recon_loss + CLASSIFIER_COEF*classifier_loss
+        print(loss)
+        self.zero_grad()
+        loss.backward()
+        self.idea_maker.opt.step()
+        self.encoder.opt.step()
+        self.decoder.opt.step()
+        #little_d_update
+        little_classifier_loss, little_d_loss = self.little_d_pass(real_idea, fake_idea, answer)
+        loss = CLASSIFIER_COEF*little_classifier_loss + little_d_loss
+        print(loss)
+        self.zero_grad()
+        loss.backward()
+        self.little_d.opt.step()
+        #big_d_update
+        loss = self.big_d_pass(real_img, fake_img)
+        print(loss)
+        self.zero_grad()
+        loss.backward()
+        self.big_d.opt.step()
+        for p in self.big_d.parameters():
+            p.data.clamp_(-0.01, 0.01)
 
