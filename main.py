@@ -22,7 +22,7 @@ if __name__ == '__main__':
                 continue
             if big_d_update_cnt < BIG_D_UPDATE_NUM:
                 big_d_update_cnt += 1
-                idea_gan.big_d_only_update(real_img)
+                idea_gan.d_only_update(real_img, answer)
             else:
                 big_d_update_cnt = 0
                 idea_gan.update_all(real_img, answer)

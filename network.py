@@ -152,6 +152,12 @@ class IdeaGAN(nn.Module):
         fake_img = self.decoder(idea)
         return fake_img.detach().to(DEVICE)
 
+    def make_idea(self, real_img):
+        real_idea = self.encoder(real_img)
+        noise = torch.randn(BATCH_SIZE, NOISE_DIM).to(DEVICE)
+        fake_idea = self.idea_maker(noise)
+        return real_idea.detach(), fake_idea.detach()
+
     def make_restored_img(self, real_img):
         real_idea = self.encoder(real_img)
         reconstructed = self.decoder(real_idea)
@@ -193,12 +199,22 @@ class IdeaGAN(nn.Module):
         little_d_loss = 0.5*real_d_loss + 0.5*fake_d_loss
         return classifier_loss, little_d_loss
 
-    def big_d_only_update(self, real_img):
+    def d_only_update(self, real_img, answer):
+        #big_d update
         fake_img = self.make_fake_img()
         big_d_loss = self.big_d_pass(real_img, fake_img)
         self.zero_grad()
         big_d_loss.backward()
         self.big_d.opt.step()
+        for p in self.big_d.parameters():
+            p.data.clamp_(-0.01, 0.01)
+        #little_d update
+        real_idea, fake_idea = self.make_idea(real_img)
+        classifier_loss, little_d_loss = self.little_d_pass(real_idea, fake_idea, answer)
+        little_d_loss = CLASSIFIER_COEF*classifier_loss + little_d_loss
+        self.zero_grad()
+        little_d_loss.backward()
+        self.little_d.opt.step()
         for p in self.big_d.parameters():
             p.data.clamp_(-0.01, 0.01)
 
