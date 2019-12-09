@@ -184,19 +184,15 @@ class IdeaGAN(nn.Module):
         return recon_loss, classifier_loss, real_idea.detach()
 
     def big_d_pass(self, real_img, fake_img):
-        real_out = torch.mean(self.big_d(real_img))
-        fake_out = torch.mean(self.big_d(fake_img))
-        return real_out - fake_out
+        real_out = self.big_d(real_img)
+        fake_out = self.big_d(fake_img)
+        return torch.mean(real_out - fake_out)
 
     def little_d_pass(self, real_idea, fake_idea, answer):
         real_out = self.little_d(real_idea)
         fake_out = self.little_d(fake_idea)
         classifier_loss = self.crossentropy_loss(real_out[:, :-1], answer)
-        real_label = torch.ones(BATCH_SIZE).to(DEVICE)
-        fake_label = torch.zeros(BATCH_SIZE).to(DEVICE)
-        real_d_loss = self.logit_bceloss(real_out[:, -1], real_label)
-        fake_d_loss = self.logit_bceloss(fake_out[:, -1], fake_label)
-        little_d_loss = 0.5*real_d_loss + 0.5*fake_d_loss
+        little_d_loss = torch.mean(real_out - fake_out)
         return classifier_loss, little_d_loss
 
     def d_only_update(self, real_img, answer):
