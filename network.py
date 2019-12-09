@@ -99,7 +99,7 @@ class Little_D(nn.Module):
             nn.Linear(NOISE_DIM, CLASS_NUM + 1),
         )
         self.apply(init_weights)
-        self.opt = optim.Adam(self.parameters(), LITTLE_D_LR)
+        self.opt = optim.RMSprop(self.parameters(), LITTLE_D_LR)
 
     def forward(self, x):
         return self.network(x)
