@@ -5,6 +5,7 @@ import torchvision.transforms as transforms
 import numpy as np
 from torch import nn
 from torch.utils.data import DataLoader
+from torch.distributions.multivariate_normal import MultivariateNormal
 from torchvision.utils import save_image
 from itertools import chain
 from config import *
@@ -23,6 +24,7 @@ def init_weights(m):
 class IdeaMaker(nn.Module):
     def __init__(self):
         super(IdeaMaker, self).__init__()
+        self.cov = torch.eye(NOISE_DIM)
         self.network = nn.Sequential(
             nn.Linear(NOISE_DIM, IM_HIDDEN_UNIT_NUM),
             nn.BatchNorm1d(IM_HIDDEN_UNIT_NUM),
@@ -34,11 +36,14 @@ class IdeaMaker(nn.Module):
 
 
     def forward(self, x):
-        return self.network(x)
+        m = self.network(x)
+        dist = MultivariateNormal(m, self.cov)
+        return dist.rsample()
 
 class Encoder(nn.Module):
     def __init__(self, params=None, layernorm=True):
         super(Encoder, self).__init__()
+        self.cov = torch.eye(NOISE_DIM)
         if params is None:
             # (ch, kernel, stride, padding)
             params = [(NDF*1, 4, 2, 1), (NDF*2, 4, 2, 1), (NDF*4, 4, 2, 1), (NDF*8, 4, 2, 1)]
@@ -62,8 +67,9 @@ class Encoder(nn.Module):
         for layer in self.convs:
             x = layer(x)
         x = x.view(x.size(0), -1)
-        x = self.fc(x)
-        return x
+        m = self.fc(x)
+        dist = MultivariateNormal(m, self.cov)
+        return dist.rsample()
 
 class Decoder(nn.Module):
     def __init__(self, params=None):
