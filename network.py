@@ -24,7 +24,7 @@ def init_weights(m):
 class IdeaMaker(nn.Module):
     def __init__(self):
         super(IdeaMaker, self).__init__()
-        self.cov = torch.eye(NOISE_DIM)
+        self.cov = torch.eye(NOISE_DIM).to(DEVICE)
         self.network = nn.Sequential(
             nn.Linear(NOISE_DIM, IM_HIDDEN_UNIT_NUM),
             nn.BatchNorm1d(IM_HIDDEN_UNIT_NUM),
@@ -43,7 +43,7 @@ class IdeaMaker(nn.Module):
 class Encoder(nn.Module):
     def __init__(self, params=None, layernorm=True):
         super(Encoder, self).__init__()
-        self.cov = torch.eye(NOISE_DIM)
+        self.cov = torch.eye(NOISE_DIM).to(DEVICE)
         if params is None:
             # (ch, kernel, stride, padding)
             params = [(NDF*1, 4, 2, 1), (NDF*2, 4, 2, 1), (NDF*4, 4, 2, 1), (NDF*8, 4, 2, 1)]
