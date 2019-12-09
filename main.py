@@ -16,9 +16,12 @@ if __name__ == '__main__':
     step_cnt = 0
     for e in range(EPOCH):
         for real_img, answer in data_loader:
+            real_img = real_img.to(DEVICE)
+            answer = answer.to(DEVICE)
             if real_img.size(0) < BATCH_SIZE:
                 continue
             if big_d_update_cnt < BIG_D_UPDATE_NUM:
+                big_d_update_cnt += 1
                 idea_gan.big_d_only_update(real_img)
             else:
                 big_d_update_cnt = 0
@@ -27,4 +30,6 @@ if __name__ == '__main__':
             print(step_cnt)
             if step_cnt % 10 == 0:
                 fake_img = idea_gan.make_fake_img()
-                save_image(make_grid(fake_img, normalize=True), "./tmp/tmp.png")
+                real_img = idea_gan.make_restored_img(real_img)
+                save_image(make_grid(fake_img, normalize=True), "./tmp/fake.png")
+                save_image(make_grid(real_img, normalize=True), "./tmp/restored.png")

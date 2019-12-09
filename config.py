@@ -18,7 +18,7 @@ DECODER_LR = 1e-3
 NDF = 64
 #Little_D hyperparameter
 LITTLE_D_LR = 1e-3
-CLASSIFIER_COEF = 0.2
+CLASSIFIER_COEF = 1.0
 #Big_D hyperparameter
 BIG_D_LR = 5e-5
 BIG_D_UPDATE_NUM = 5

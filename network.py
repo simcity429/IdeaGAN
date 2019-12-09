@@ -150,13 +150,18 @@ class IdeaGAN(nn.Module):
         noise = torch.randn(BATCH_SIZE, NOISE_DIM).to(DEVICE)
         idea = self.idea_maker(noise)
         fake_img = self.decoder(idea)
-        return fake_img.detach()
+        return fake_img.detach().to(DEVICE)
+
+    def make_restored_img(self, real_img):
+        real_idea = self.encoder(real_img)
+        reconstructed = self.decoder(real_idea)
+        return reconstructed.detach().to(DEVICE)
 
     def g_fake_pass(self):
         noise = torch.randn(BATCH_SIZE, NOISE_DIM).to(DEVICE)
         fake_idea = self.idea_maker(noise)
         little_d_out = self.little_d(fake_idea)
-        fake_img = self.decoder(fake_idea.detach())
+        fake_img = self.decoder(fake_idea)
         big_d_out = self.big_d(fake_img)
         adv_big_d_loss = -torch.mean(big_d_out)
         real_label = torch.ones(BATCH_SIZE).to(DEVICE)
