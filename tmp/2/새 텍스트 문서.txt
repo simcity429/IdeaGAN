@@ -1,0 +1,6 @@
+mode:  TRANSFORMER
+last_100_jsd_mean:  0.27567533
+last_100_probmax_mean:  0.9473084
+mode:  BASELINE
+last_100_jsd_mean:  0.51307267
+last_100_probmax_mean:  0.85761416
