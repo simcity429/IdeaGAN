@@ -1,6 +1,6 @@
 import torch
 
-MODE = 'TRANSFORMER'
+MODE = 'BASELINE'
 DEVICE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 NOISE_DIM = 25
 IMG_SIZE = 32
